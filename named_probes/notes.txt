@@ -1,0 +1,45 @@
+LICENSE: all rights of original code reserved.  Derivative code per the original author's license where applicable and generally TBD... This is a work-in-progress.
+
+These files are part of an experiment to extend the function of klipper's [probe] object to facilitate multiple probes being used by different functions on the same printer.
+
+Example:
+1. TAP probe for Z-home
+2. Inductive probe for QGL and Bedmesh
+
+A hypothetical printer.cfg for such a thing would be:
+[probe]
+pin: PB5
+# other probe configuration
+
+[probe PINDA]
+pin: PB6
+# other probe configuration
+
+[quad_gantry_level]
+probe: PINDA
+# other QGL configuration
+
+[bed_mesh]
+probe: PINDA
+# other mesh configuration
+
+2 Parts to this modification:
+1. modify/replace klipper/klippy/extras/probe.py to support named probes and multiple probes.
+# existing Z-probe definition
+[probe] - the default probe you are already using
+# new additional probe definitions
+[probe NAME] - 1-N new probes you wish to also use
+
+2. modify bed_mesh.py specifically to allow the "probe:" configuration.  quad_gantry_level.py already allows this argument to pass through so required no edits on my system.
+
+Assumptions:
+- You know what you are doing and that this is a bad idea to mess with... pre-pre-alpha code not even subject to a PR to klipper yet.  Use at your own risk
+- You have dealt with the mechanical issues of adding this second probe and making it available
+
+Other notes:
+- I am using this with StealthChanger, so the [probe] is not used or required in that instance since [tool_probe Tn] replaces it.  That still works unchanged.
+- These files completely replace their corresponding file in the latest (as of 10/19/2024) klipper/klippy/extras directory
+- Again... you shouldn't even be here if you don't know why and aren't willing to accept the risk to malfunction or damage to your machine.
+- This repo is here as a collaborative convenience and not intended to be a long-term location for anything... don't rely on it.  Hopefully any useful outcomes will be folded into one or more other projects in the future.
+- The usual probe settings are available here as I am using probe.py... so retraction speed, z height, samples, etc... use as you normally would in the [probe NAME] section of your printer.cfg
+- The normal macros that come with the probe such as PROBE_ACCURACY still exist, but have been named PROBE_ACCURACY_NAME where the "NAME" is whatever probe name you specified... my intention is to make PROBE_ACCURACY take a PROBE= argument and automatically call the others, but that is NOT IMPLEMENTED YET.  So, for now, if you want to use one of those... add your _NAME to them.  (_PINDA in the example .cfg above)
