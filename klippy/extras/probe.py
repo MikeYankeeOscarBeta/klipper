@@ -28,7 +28,7 @@ def calc_probe_z_average(positions, method='average'):
         return z_sorted[middle]
     # even number of samples
     return calc_probe_z_average(z_sorted[middle-1:middle+1], 'average')
-
+        
 
 ######################################################################
 # Probe device implementation helpers
@@ -40,26 +40,46 @@ class ProbeCommandHelper:
         self.printer = config.get_printer()
         self.probe = probe
         self.query_endstop = query_endstop
-        self.name = config.get_name()
+        name = config.get_name().split(' ')
+        self.name       = name[0]
+        self.probe_name = name[1] if len(name) > 1 else 'probe'
+
         gcode = self.printer.lookup_object('gcode')
+
+        # modify probe commands if named probes are used
+        query_probe_cmd          = 'QUERY_PROBE'
+        probe_cmd                = 'PROBE'
+        probe_calibrate_cmd      = 'PROBE_CALIBRATE'
+        probe_accuracy_cmd       = 'PROBE_ACCURACY'
+        z_offset_apply_probe_cmd = 'Z_OFFSET_APPLY_PROBE'
+
+        if self.probe_name != 'probe':
+            query_probe_cmd          += '_' + self.probe_name.upper()
+            probe_cmd                += '_' + self.probe_name.upper()
+            probe_calibrate_cmd      += '_' + self.probe_name.upper()
+            probe_accuracy_cmd       += '_' + self.probe_name.upper()
+            z_offset_apply_probe_cmd += '_' + self.probe_name.upper()
+        
         # QUERY_PROBE command
         self.last_state = False
-        gcode.register_command('QUERY_PROBE', self.cmd_QUERY_PROBE,
+        gcode.register_command(query_probe_cmd, self.cmd_QUERY_PROBE,
                                desc=self.cmd_QUERY_PROBE_help)
         # PROBE command
         self.last_z_result = 0.
-        gcode.register_command('PROBE', self.cmd_PROBE,
+        gcode.register_command(probe_cmd, self.cmd_PROBE,
                                desc=self.cmd_PROBE_help)
         # PROBE_CALIBRATE command
         self.probe_calibrate_z = 0.
-        gcode.register_command('PROBE_CALIBRATE', self.cmd_PROBE_CALIBRATE,
+        gcode.register_command(probe_calibrate_cmd, self.cmd_PROBE_CALIBRATE,
                                desc=self.cmd_PROBE_CALIBRATE_help)
         # Other commands
-        gcode.register_command('PROBE_ACCURACY', self.cmd_PROBE_ACCURACY,
+        gcode.register_command(probe_accuracy_cmd, self.cmd_PROBE_ACCURACY,
                                desc=self.cmd_PROBE_ACCURACY_help)
-        gcode.register_command('Z_OFFSET_APPLY_PROBE',
+
+        gcode.register_command(z_offset_apply_probe_cmd,
                                self.cmd_Z_OFFSET_APPLY_PROBE,
                                desc=self.cmd_Z_OFFSET_APPLY_PROBE_help)
+        
     def _move(self, coord, speed):
         self.printer.lookup_object('toolhead').manual_move(coord, speed)
     def get_status(self, eventtime):
@@ -178,8 +198,14 @@ class HomingViaProbeHelper:
         self.printer = config.get_printer()
         self.mcu_probe = mcu_probe
         self.multi_probe_pending = False
+        #self.probe_name = config.get('probe', 'probe')        
+        name = config.get_name().split(' ')
+        self.name       = name[0]
+        self.probe_name = name[1] if len(name) > 1 else 'probe'
+                
         # Register z_virtual_endstop pin
-        self.printer.lookup_object('pins').register_chip('probe', self)
+        self.printer.lookup_object('pins').register_chip(self.probe_name, self)
+            
         # Register event handlers
         self.printer.register_event_handler('klippy:mcu_identify',
                                             self._handle_mcu_identify)
@@ -235,6 +261,10 @@ class ProbeSessionHelper:
         self.mcu_probe = mcu_probe
         gcode = self.printer.lookup_object('gcode')
         self.dummy_gcode_cmd = gcode.create_gcode_command("", "", {})
+        name = config.get_name().split(' ')
+        self.name       = name[0]
+        self.probe_name = name[1] if len(name) > 1 else 'probe'
+                
         # Infer Z position to move to during a probe
         if config.has_section('stepper_z'):
             zconfig = config.getsection('stepper_z')
@@ -244,6 +274,7 @@ class ProbeSessionHelper:
             pconfig = config.getsection('printer')
             self.z_position = pconfig.getfloat('minimum_z_position', 0.,
                                                note_valid=False)
+        
         self.homing_helper = HomingViaProbeHelper(config, mcu_probe)
         # Configurable probing speeds
         self.speed = config.getfloat('speed', 5.0, above=0.)
@@ -383,7 +414,9 @@ class ProbePointsHelper:
         self.printer = config.get_printer()
         self.finalize_callback = finalize_callback
         self.probe_points = default_points
-        self.name = config.get_name()
+        self.name       = config.get_name()
+        self.probe_name = config.get('probe', 'probe')
+        self.probe      = self.printer.lookup_object(self.probe_name, None)            
         self.gcode = self.printer.lookup_object('gcode')
         # Read config settings
         if default_points is None or config.get('points', None) is not None:
@@ -433,12 +466,13 @@ class ProbePointsHelper:
     def start_probe(self, gcmd):
         manual_probe.verify_no_manual_probe(self.printer)
         # Lookup objects
-        probe = self.printer.lookup_object('probe', None)
+        #probe = self.printer.lookup_object(self.probe_name, None)
+        #probe = self.probe # self.printer.lookup_object(self.probe_name, None)
         method = gcmd.get('METHOD', 'automatic').lower()
         def_move_z = self.default_horizontal_move_z
         self.horizontal_move_z = gcmd.get_float('HORIZONTAL_MOVE_Z',
                                                 def_move_z)
-        if probe is None or method == 'manual':
+        if self.probe is None or method == 'manual':
             # Manual probe
             self.lift_speed = self.speed
             self.probe_offsets = (0., 0., 0.)
@@ -446,12 +480,12 @@ class ProbePointsHelper:
             self._manual_probe_start()
             return
         # Perform automatic probing
-        self.lift_speed = probe.get_probe_params(gcmd)['lift_speed']
-        self.probe_offsets = probe.get_offsets()
+        self.lift_speed = self.probe.get_probe_params(gcmd)['lift_speed']
+        self.probe_offsets = self.probe.get_offsets()
         if self.horizontal_move_z < self.probe_offsets[2]:
             raise gcmd.error("horizontal_move_z can't be less than"
                              " probe's z_offset")
-        probe_session = probe.start_probe_session(gcmd)
+        probe_session = self.probe.start_probe_session(gcmd)
         probe_num = 0
         while 1:
             self._raise_tool(not probe_num)
@@ -562,11 +596,19 @@ class ProbeEndstopWrapper:
 class PrinterProbe:
     def __init__(self, config):
         self.printer = config.get_printer()
+        name = config.get_name().split(' ')
+        self.name       = name[0]
+        self.probe_name = name[1] if len(name) > 1 else 'probe'
+
+        if self.probe_name != 'probe':
+            self.printer.add_object(self.probe_name,self)
+
         self.mcu_probe = ProbeEndstopWrapper(config)
         self.cmd_helper = ProbeCommandHelper(config, self,
                                              self.mcu_probe.query_endstop)
         self.probe_offsets = ProbeOffsetsHelper(config)
         self.probe_session = ProbeSessionHelper(config, self.mcu_probe)
+
     def get_probe_params(self, gcmd=None):
         return self.probe_session.get_probe_params(gcmd)
     def get_offsets(self):
@@ -576,5 +618,10 @@ class PrinterProbe:
     def start_probe_session(self, gcmd):
         return self.probe_session.start_probe_session(gcmd)
 
+def load_config_prefix(config):
+    return PrinterProbe(config)
+
 def load_config(config):
     return PrinterProbe(config)
+
+
